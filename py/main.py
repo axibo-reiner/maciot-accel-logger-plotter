@@ -12,13 +12,15 @@ import sys  # We need sys so that we can pass argv to QApplication
 import os
 import csv
 import copy
+
+
 SAMPLE_HOLD = 300 #change for the needs of the graph
 
 class AccelDataGrabber:
 
     def __init__(self, portName):
         time.sleep(1)
-        baudrate = 912600
+        baudrate = 2000000
         self.ser = serial.Serial(portName,baudrate,timeout=1)
         self.ser.setDTR(False)
         time.sleep(1)
@@ -31,14 +33,26 @@ class AccelDataGrabber:
         self.data={"A": [0,0,0,0], "G":[0,0,0,0], "T": time.time()}
         serial_worker = Thread(target=self.serial_receiver)
         serial_worker.start()
-        writer_worker = Thread(target=self.csv_writer)
-        writer_worker.start()
+        #writer_worker = Thread(target=self.csv_writer)
+        #writer_worker.start()
 
 
     def handler(self, signal, frame):
         global THREADS
         print ("Ctrl-C.... Exiting")
         self.exit = True
+
+    def decode_accel(self, value):
+        x = (value.strip().split(',')[1:])
+        self.data['A'] = [float(val) for val in x]
+        self.data['T'] = time.time()
+        self.q.put(copy.copy(self.data))
+
+    def decode_gyro(self, value):
+        x = (value.strip().split(',')[1:])
+        self.data['G'] = [float(val) for val in x]
+        self.data['T'] = time.time()
+        self.q.put(copy.copy(self.data))
 
     def serial_receiver(self):
         ic("Started main thread")
@@ -51,15 +65,20 @@ class AccelDataGrabber:
                 value = self.ser.readline().decode()
             except (AttributeError, UnicodeDecodeError) as e:
                 continue
-            if value[0] == 'G':
-                x = (value.strip().split(',')[1:])
-                self.data['G'] = [float(val) for val in x]
-                index += 1
-                self.data['T'] = time.time()
-                self.q.put(copy.copy(self.data))
+            # if value[0] == 'G':
+            #     index += 1
+            #     try:
+            #         self.decode_gyro(value)
+            #     except:
+            #         pass
+
             if value[0] == 'A':
-                x = (value.strip().split(',')[1:])
-                self.data['A'] = [float(val) for val in x]
+                index += 1
+                try:
+                    self.decode_accel(value)
+                except:
+                    pass
+
             if index == 60:
                 print("Accel Stream Rate (recvied in python) {:.2f}Hz".format( 1.0 / ((time.time() - last_message)/60.0)))
                 index = 0
@@ -103,16 +122,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(self.graphWidget)
 
         self.x = list(range(SAMPLE_HOLD))  # 100 time points
-        self.y = [0 for _ in range(SAMPLE_HOLD)]  # 100 data points
-        self.gy = [0 for _ in range(SAMPLE_HOLD)]  # 100 data points
+        self.y = [[0 for _ in range(SAMPLE_HOLD)], [0 for _ in range(SAMPLE_HOLD)],[0 for _ in range(SAMPLE_HOLD)]]  # 100 data points
+        print(type(self.y))
         time.sleep(0.1)
 
         self.graphWidget.setBackground('black')
 
-        pen = pg.mkPen(color=(0, 255, 0))
-        pen_2 = pg.mkPen(color=(0, 0, 255))
-        self.data_line_accel =  self.graphWidget.plot(self.x, self.y, pen=pen)
-        #self.data_line_gyro =  self.graphWidget.plot(self.x, self.gy, pen=pen_2)
+        self.plots = [None, None, None]
+        for i in range(3):
+            self.plots[i] = self.graphWidget.plot(self.x, self.y[i], pen=(i,3))
 
         self.timer = QtCore.QTimer()
         self.timer.setInterval(50)
@@ -130,14 +148,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.x = self.x[1:]  # Remove the first y element.
         self.x.append(self.x[-1] + 1)  # Add a new value 1 higher than the last.
 
-        self.y = self.y[1:]  # Remove the first 
-        self.y.append(self.data_source.data['G'][2])  # Add a new random value.
+        
+        for i in range(3):
+            self.y[i] = self.y[i][1:]  # Remove the first 
+            self.y[i].append(self.data_source.data['A'][i])  # Add a new random value.
 
-        self.gy = self.gy[1:]  # Remove the first 
-        #self.gy.append(self.data_source.data['G'][3])  # Add a new random value.
-
-        self.data_line_accel.setData(self.x, self.y)  # Update the data.
-        #self.data_line_gyro.setData(self.x, self.gy)  # Update the data.
+        for i in range(3):
+            self.plots[i].setData(self.x, self.y[i])
 
 
 if __name__== '__main__':
